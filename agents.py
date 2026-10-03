@@ -118,28 +118,42 @@ def retrieve_underwriting_rules(state: ComplianceState) -> Dict[str, Any]:
 # ============================================================
 # Validation (per category, parallel-safe via multi-write violations)
 # ============================================================
+from langchain_core.messages import AIMessage
+
 def validate_cancellation(state: ComplianceState) -> Dict[str, Any]:
     policy = state["policy_data"]
     rules = state.get("cancellation_rules", [])
-
     violations = interpret_rules(policy, rules)
-    return {"violations": violations}
+
+    return {
+        "violations": [
+            AIMessage(content=json.dumps(v)) for v in violations
+        ]
+    }
 
 
 def validate_nonrenewal(state: ComplianceState) -> Dict[str, Any]:
     policy = state["policy_data"]
     rules = state.get("nonrenewal_rules", [])
-
     violations = interpret_rules(policy, rules)
-    return {"violations": violations}
 
+    return {
+        "violations": [
+            AIMessage(content=json.dumps(v)) for v in violations
+        ]
+    }
 
 def validate_underwriting(state: ComplianceState) -> Dict[str, Any]:
     policy = state["policy_data"]
     rules = state.get("underwriting_rules", [])
-
     violations = interpret_rules(policy, rules)
-    return {"violations": violations}
+
+    return {
+        "violations": [
+            AIMessage(content=json.dumps(v)) for v in violations
+        ]
+    }
+
 
 
 # ============================================================
@@ -150,7 +164,11 @@ def rule_reasoner(state: ComplianceState) -> Dict[str, Any]:
     Provide deeper reasoning for each detected violation using an LLM.
     """
 
-    violations = state.get("violations", [])
+    # violations = state.get("violations", [])
+    violations = [
+    json.loads(msg.content)
+    for msg in state.get("violations", [])]
+
     policy = state.get("policy_data", {})
 
     # Combine all rule text into one block from all categories
@@ -199,11 +217,24 @@ def rule_reasoner(state: ComplianceState) -> Dict[str, Any]:
 # Compliance scoring
 # ============================================================
 def compliance_score(state: ComplianceState) -> Dict[str, Any]:
-    """
-    Convert violations into a numeric compliance score and decide whether escalation is required.
-    """
+    raw_violations = state.get("violations", [])
 
-    violations = state.get("violations", [])
+    # Convert AIMessage → dict
+    violations = []
+    for msg in raw_violations:
+        if isinstance(msg, AIMessage):
+            try:
+                violations.append(json.loads(msg.content))
+            except Exception:
+                return {
+                    "requires_escalation": True,
+                    "final_response": "Guardrail failure: Invalid violation message format."
+                }
+        else:
+            return {
+                "requires_escalation": True,
+                "final_response": "Guardrail failure: Violation is not an AIMessage."
+            }
 
     # No violations → perfect score
     if not violations:
@@ -213,7 +244,9 @@ def compliance_score(state: ComplianceState) -> Dict[str, Any]:
             "requires_escalation": False,
         }
 
+    # Score each violation
     violation_scores = score_violations(violations)
+
     total_deduction = sum(v["score"] for v in violation_scores)
     final_score = max(0, 100 - total_deduction)
 
@@ -296,17 +329,103 @@ def score_violations(violations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     severity_weights = {
         "high": 50,
         "medium": 30,
-        "low": 10,
+        "low": 10
     }
 
-    scored: List[Dict[str, Any]] = []
-
+    scored = []
     for v in violations:
         severity = v.get("severity", "medium").lower()
         deduction = severity_weights.get(severity, 30)
         scored.append({
             "severity": severity,
-            "score": deduction,
+            "score": deduction
         })
 
     return scored
+
+
+def guardrails_pre_validation(state: ComplianceState) -> Dict[str, Any]:
+    errors = []
+
+    policy = state.get("policy_data", {})
+    if "state" not in policy:
+        errors.append("Policy missing 'state' field.")
+    if "notice_days" not in policy:
+        errors.append("Policy missing 'notice_days' field.")
+    if not policy.get("policy_number"):
+        errors.append("Policy missing 'policy_number'.")
+
+    if errors:
+        return {
+            "requires_escalation": True,
+            "final_response": f"Guardrail failure: {errors}"
+        }
+
+    return {}
+
+
+def guardrails_post_validation(state: ComplianceState) -> Dict[str, Any]:
+    raw_violations = state.get("violations", [])
+    errors = []
+
+    # Convert AIMessage → dict
+    violations = []
+    for msg in raw_violations:
+        if isinstance(msg, AIMessage):
+            try:
+                violations.append(json.loads(msg.content))
+            except Exception:
+                errors.append("Invalid violation message format.")
+        else:
+            errors.append("Violation is not an AIMessage.")
+
+    # Now validate dicts
+    for v in violations:
+        if "severity" not in v:
+            errors.append("Violation missing severity.")
+        elif v["severity"] not in ["low", "medium", "high"]:
+            errors.append(f"Invalid severity: {v['severity']}")
+
+        if "violation" not in v:
+            errors.append("Violation missing description.")
+
+    if errors:
+        return {
+            "requires_escalation": True,
+            "final_response": f"Guardrail failure: {errors}"
+        }
+
+    return {}
+
+def guardrails_post_reasoning(state: ComplianceState) -> Dict[str, Any]:
+    raw_reasoning = state.get("reasoning", [])
+    errors = []
+
+    reasoning = []
+    for msg in raw_reasoning:
+        if isinstance(msg, AIMessage):
+            try:
+                reasoning.append(json.loads(msg.content))
+            except Exception:
+                errors.append("Invalid reasoning message format.")
+        else:
+            errors.append("Reasoning is not an AIMessage.")
+
+    if not reasoning:
+        return {
+            "requires_escalation": True,
+            "final_response": "Guardrail failure: Missing reasoning."
+        }
+
+    return {}
+
+def hitl_review(state: ComplianceState) -> Dict[str, Any]:
+    return {
+        "final_response": {
+            "status": "HITL_REQUIRED",
+            "message": "A human underwriter must review this case.",
+            "violations": state.get("violations", []),
+            "reasoning": state.get("reasoning", []),
+            "score": state.get("compliance_score", None)
+        }
+    }
