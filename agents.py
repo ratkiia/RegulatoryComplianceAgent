@@ -18,6 +18,7 @@ from langgraph.graph import add_messages
 from langchain_openai import ChatOpenAI
 from rag_pgvector import get_regulation_retriever
 from pas_mock import get_policy
+from langchain_core.messages import AIMessage
 
 llm = ChatOpenAI(model="gpt-4o-mini")  # lightweight, fast
 
@@ -28,6 +29,12 @@ llm = ChatOpenAI(model="gpt-4o-mini")  # lightweight, fast
 class ComplianceState(TypedDict):
     intent: str
     policy_data: Dict[str, Any]
+
+    hitl_action: str
+    override_violations: List[Dict[str, Any]]
+    override_score: float
+    override_final_response: str
+
 
     # Per-category rule sets
     cancellation_rules: List[Document]
@@ -118,8 +125,6 @@ def retrieve_underwriting_rules(state: ComplianceState) -> Dict[str, Any]:
 # ============================================================
 # Validation (per category, parallel-safe via multi-write violations)
 # ============================================================
-from langchain_core.messages import AIMessage
-
 def validate_cancellation(state: ComplianceState) -> Dict[str, Any]:
     policy = state["policy_data"]
     rules = state.get("cancellation_rules", [])
@@ -428,4 +433,45 @@ def hitl_review(state: ComplianceState) -> Dict[str, Any]:
             "reasoning": state.get("reasoning", []),
             "score": state.get("compliance_score", None)
         }
+    }
+
+def hitl_approval(state: ComplianceState) -> Dict[str, Any]:
+    """
+    Human-in-the-loop approval workflow.
+
+    Expected input from human:
+        state["hitl_action"] ∈ {"approve", "reject", "override"}
+
+    Optional:
+        state["override_violations"]
+        state["override_score"]
+        state["override_final_response"]
+    """
+
+    action = state.get("hitl_action")
+
+    if action == "approve":
+        return {
+            "final_response": "HITL approved. Compliance result accepted.",
+            "requires_escalation": False
+        }
+
+    if action == "reject":
+        return {
+            "final_response": "HITL rejected the AI result. Case must be re-evaluated.",
+            "requires_escalation": True
+        }
+
+    if action == "override":
+        return {
+            "violations": state.get("override_violations", []),
+            "compliance_score": state.get("override_score", 0),
+            "final_response": state.get("override_final_response", "HITL override applied."),
+            "requires_escalation": False
+        }
+
+    # If no action provided
+    return {
+        "final_response": "Awaiting HITL decision.",
+        "requires_escalation": True
     }

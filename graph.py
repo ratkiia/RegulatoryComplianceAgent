@@ -3,6 +3,7 @@ from langchain_core.messages import AIMessage
 
 from agents import (
     ComplianceState,
+    hitl_approval,
     intent_router,
     pas_lookup,
     guardrails_pre_validation,
@@ -46,6 +47,7 @@ graph.add_node("guardrails_post_reasoning", guardrails_post_reasoning)
 
 graph.add_node("compliance_score", compliance_score)
 graph.add_node("hitl_review", hitl_review)
+graph.add_node("hitl_approval", hitl_approval)
 graph.add_node("escalation", escalation)
 graph.add_node("response", response)
 
@@ -99,7 +101,23 @@ def score_branch(state: ComplianceState) -> str:
 graph.add_conditional_edges("compliance_score", score_branch)
 
 # HITL → END
-graph.add_edge("hitl_review", END)
+# graph.add_edge("hitl_review", END)
+# graph.add_conditional_edges("hitl_review", lambda state: "hitl_review" if state["requires_escalation"] == True else "response")
+
+def hitl_branch(state: ComplianceState) -> str:
+    # Human must approve/reject/override
+    return "hitl_approval"
+
+def hitl_approval_branch(state: ComplianceState) -> str:
+    if state["requires_escalation"]:
+        return "escalation"
+    return "response"
+
+graph.add_conditional_edges("hitl_approval", hitl_approval_branch)
+
+
+# graph.add_edge("hitl_review", "hitl_approval")
+
 
 # Response → END
 graph.add_edge("response", END)

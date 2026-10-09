@@ -1,6 +1,6 @@
 # Regulatory Compliance Agent
 
-A prototype insurance-policy compliance workflow built with LangGraph, LangChain, OpenAI, and PostgreSQL with pgvector. It retrieves regulatory text, checks a policy against that text, scores detected violations, and routes cases for underwriter review when escalation is required.
+A prototype insurance-policy compliance workflow built with LangGraph, LangChain, OpenAI, and PostgreSQL with pgvector. It retrieves regulatory text, checks a policy against that text, and scores detected violations. The backend and frontend are scaffolds: the graph can produce a human-review result, but the case-review flow is not yet connected end to end.
 
 ## Architecture
 
@@ -56,6 +56,7 @@ flowchart TD
 - Python 3.10 or newer
 - PostgreSQL with the [pgvector extension](https://github.com/pgvector/pgvector) installed and enabled
 - An OpenAI API key
+- Node.js and npm (for the frontend)
 
 The application reads `OPENAI_API_KEY` and `PG_CONN_STR` from the environment (or a local `.env` file). `PG_CONN_STR` should be a PostgreSQL connection string usable by psycopg, for example:
 
@@ -100,6 +101,30 @@ The example uses the mock PAS record `CT-123`. The workflow entry state must inc
 
 The graph retrieves cancellation, non-renewal, and underwriting rules in parallel, validates the policy against each category, reasons over any violations, and scores them. A score below 70 sets `requires_escalation` and routes to human review; otherwise the workflow returns a compliant response. The PAS implementation is an in-memory mock, not a connection to a production policy administration system.
 
+## Run the API
+
+From the repository root, start the FastAPI application with:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:fastapi_app --app-dir backend --reload
+```
+
+The API routers are available under `/cases` and `/hitl`. Case storage is currently in memory, so cases are lost when the server restarts and are not shared between worker processes.
+
+Available endpoints are `GET /cases`, `GET /cases/{case_id}`, `POST /hitl/approve`, `POST /hitl/reject`, and `POST /hitl/override`. The backend currently has no endpoint to create or initially evaluate a case, so its in-memory case list starts empty; the HITL endpoints return 404 until a case is created in memory. The HITL endpoints invoke the graph again rather than resume it from a saved pause. Open the interactive API docs at `http://localhost:8000/docs` while the server is running.
+
+## Run the frontend
+
+From the repository root, install the JavaScript dependencies and start the Vite development server:
+
+```powershell
+cd frontend
+npm install
+npm start
+```
+
+Open the local URL printed by Vite (usually `http://localhost:5173`). The current UI is a starter dashboard with a placeholder Cases page; it does not yet fetch data from the API. The case-detail components and API client under `frontend/src/` are not yet connected to the app routes.
+
 ## Project files
 
 - `agents.py` — shared graph state, retrieval/validation agents, guardrails, reasoning, and scoring.
@@ -109,3 +134,5 @@ The graph retrieves cancellation, non-renewal, and underwriting rules in paralle
 - `pas_mock.py` — in-memory sample policy administration system.
 - `main.py` — sample graph invocation.
 - `requirements.txt` — Python dependencies.
+- `backend/app/` — FastAPI entry point, case/HITL routers, and in-memory case storage.
+- `frontend/` — Vite/React starter app and currently unconnected case UI components/API clients.

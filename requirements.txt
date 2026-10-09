@@ -6,3 +6,6 @@ psycopg[binary]
 python-dotenv
 langchain-text-splitters
 pypdf
+fastapi 
+uvicorn
+pydantic

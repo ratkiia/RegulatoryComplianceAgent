@@ -2,6 +2,7 @@
 from graph import app
 from agents import ComplianceState
 
+
 def main():
     # Dummy CT policy that violates 30-day notice
     initial_state: ComplianceState = {
